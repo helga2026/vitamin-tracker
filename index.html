@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#10B981" />
+  <meta name="description" content="Умный трекер витаминов и здоровья — MVP мобильное веб-приложение." />
+  <title>Умный трекер витаминов</title>
+  <script>
+    /* Перехват ошибок запуска (диагностика) */
+    window.__mbErrors = [];
+    (function () {
+      var _ce = console.error;
+      console.error = function () {
+        try { window.__mbErrors.push([].slice.call(arguments).map(String).join(' ')); } catch (e) {}
+        _ce.apply(console, arguments);
+      };
+      window.addEventListener('error', function (e) {
+        if (e.target && e.target.tagName === 'SCRIPT') {
+          window.__mbErrors.push('НЕ ЗАГРУЗИЛСЯ СКРИПТ: ' + (e.target.src || 'inline'));
+        } else {
+          window.__mbErrors.push((e.message || '') + ' @' + (e.filename || '') + ':' + (e.lineno || ''));
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        window.__mbErrors.push('Promise: ' + ((e.reason && e.reason.message) || e.reason));
+      });
+    })();
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script>window.react = window.React; /* lucide-react UMD ожидает строчное имя */</script>
+  <script src="https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide-react@0.454.0/dist/umd/lucide-react.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js" crossorigin="anonymous"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            teal: { 50: '#ECFDF5', 100: '#D1FAE5', 400: '#34D399', 500: '#10B981', 600: '#0D9488', 700: '#0F766E' },
+            ink: { DEFAULT: '#1F2937', soft: '#6B7280' },
+            cloud: '#F9FAFB'
+          },
+          fontFamily: { sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'] }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    html, body { height: 100%; }
+    body { background: #E5E7EB; -webkit-tap-highlight-color: transparent; }
+    ::selection { background: #D1FAE5; }
+
+    @keyframes vt-fade { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes vt-rise { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+    @keyframes vt-pop  { 0% { transform: scale(.85) } 60% { transform: scale(1.04) } 100% { transform: scale(1) } }
+    .anim-fade { animation: vt-fade .35s ease both; }
+    .anim-up   { animation: vt-rise .4s cubic-bezier(.22,1,.36,1) both; }
+    .anim-pop  { animation: vt-pop .35s cubic-bezier(.22,1,.36,1) both; }
+
+    /* Плавный прогресс-бар */
+    .ring-progress { transition: stroke-dashoffset .7s cubic-bezier(.22,1,.36,1); }
+    .check-pop { transition: transform .25s cubic-bezier(.22,1,.36,1), background-color .25s ease; }
+    .check-pop:active { transform: scale(.85); }
+
+    * { scrollbar-width: thin; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+
+<body class="font-sans antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    /* ================================================================
+       Умный трекер витаминов и здоровья — mobile-first MVP
+       Экраны: /onboarding -> / (Home) -> /survey -> /uploads -> /profile
+       Данные имитируют бэкенд через LocalStorage.
+       ================================================================ */
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+    const {
+      Home: HomeIcon, ClipboardList, FileText, User, Check, Plus, ChevronRight, ChevronLeft,
+      Pill, Droplets, Sun, Moon, HeartPulse, Activity, Upload, Trash2, ExternalLink,
+      ClipboardCheck, FolderOpen, ArrowRight, Sparkles, Mail, UserRound, Calendar, Target
+    } = LucideReact;
+
+    /* ---------- Константы ---------- */
+    const STORAGE_KEY = 'vitamin_tracker_v1';
+    const cx = (...a) => a.filter(Boolean).join(' ');
+    const uid = () => 'x_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+    // Mock-данные: витамины на сегодня (Шаг 4)
+    const VITAMINS = [
+      { id: 'vit_d3',   name: 'Витамин D3',   dose: '1000 МЕ',    time: 'Утром, во время еды',   icon: Sun,      color: '#F59E0B' },
+      { id: 'omega3',   name: 'Омега-3',      dose: '1000 мг',    time: 'Обед, после еды',       icon: Droplets, color: '#10B981' },
+      { id: 'mag_b6',   name: 'Магний B6',    dose: '2 таблетки', time: 'Вечером, перед сном',   icon: Moon,     color: '#8B5CF6' },
+      { id: 'vit_c',    name: 'Витамин C',    dose: '500 мг',     time: 'Утром, во время еды',   icon: Pill,     color: '#EF4444' }
+    ];
+
+    // Опрос: 6 вопросов пошагово (Шаг 5)
+    const SURVEY = [
+      { id: 'main_goal', q: 'Какова ваша основная цель?', opts: [
+        { v: 'energy', label: 'Повышение энергии' }, { v: 'weight', label: 'Контроль веса' },
+        { v: 'immunity', label: 'Иммунитет' }, { v: 'heart', label: 'Здоровье сердца' },
+        { v: 'gut', label: 'Работа пищеварения' }, { v: 'other', label: 'Другое' } ] },
+      { id: 'daily_activity', q: 'Какой у вас уровень активности?', opts: [
+        { v: 'high', label: 'Высокая активность' }, { v: 'moderate', label: 'Умеренная активность' },
+        { v: 'low', label: 'Низкая активность' } ] },
+      { id: 'forget_frequency', q: 'Забываете ли вы принимать витамины?', opts: [
+        { v: 'often', label: 'Часто' }, { v: 'sometimes', label: 'Иногда' }, { v: 'rarely', label: 'Редко' } ] },
+      { id: 'takes_vitamins', q: 'Принимаете ли вы витамины на сейчас?', opts: [
+        { v: 'no', label: 'Нет' }, { v: 'yes', label: 'Да' }, { v: 'plan', label: 'Планирую начать' } ] },
+      { id: 'chronic', q: 'Есть ли хронические заболевания?', opts: [
+        { v: 'no', label: 'Нет' }, { v: 'yes', label: 'Есть' }, { v: 'skip', label: 'Предпочитаю не отвечать' } ] },
+      { id: 'special', q: 'Особые состояния (беременность, возраст 60+)?', opts: [
+        { v: 'no', label: 'Нет' }, { v: 'yes', label: 'Да' }, { v: 'skip', label: 'Предпочитаю не отвечать' } ] }
+    ];
+
+    // Базовый отчёт: рекомендация по главной цели (без диагнозов!)
+    const REPORTS = {
+      energy:   'Вы указали, что ваша основная цель — повышение энергии. Это хорошая отправная точка. Обратите внимание на витамины группы B, железо и витамин D. Мы рекомендуем обсудить с вашим лечащим врачом и уделить внимание режиму сна — это самая частая причина усталости.',
+      weight:   'Вы указали, что ваша основная цель — контроль веса. Полезными могут быть витамин D, омега-3 и магний. Помните: добавки дополняют, но не заменяют сбалансированное питание. Точную схему подскажет специалист.',
+      immunity: 'Вы указали, что ваша основная цель — иммунитет. Классическая основа — витамин C, витамин D и цинк. Регулярный сон, движение и питание работают не меньше таблеток. При частых простудах стоит сдать анализы и обсудить приём с врачом.',
+      heart:    'Вы указали, что ваша основная цель — здоровье сердца. Ключевые помощники — омега-3, магний и витамин D. Это дополнение к здоровому образу жизни, а не замена консультации кардиолога.',
+      gut:      'Вы указали, что ваша основная цель — работа пищеварения. Обратите внимание на пробиотики, витамин D и магний. Добавки не заменяют консультацию гастроэнтеролога при жалобах.',
+      other:    'Вы выбрали цель «Другое». Отличная привычка — отслеживать состояние и вести дневник приёма. Обсудите персональную схему с вашим врачом: мы сознательно не даём назначений.'
+    };
+
+    /* ---------- Хранилище (имитация бэкенда) ---------- */
+    const defaultState = () => ({
+      name: '', email: '',
+      profile: { fullName: '', gender: 'male', age: '', goals: '' },
+      taken: {},
+      surveyCompleted: false,
+      surveyAnswers: {},
+      files: []
+    });
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return Object.assign(defaultState(), JSON.parse(raw));
+      } catch (e) { console.warn('Не удалось прочитать данные', e); }
+      return defaultState();
+    }
+
+    /* ---------- Тосты ---------- */
+    function toast(msg, kind) {
+      const root = document.getElementById('toast-root');
+      if (!root) return;
+      const el = document.createElement('div');
+      el.className = 'pointer-events-auto px-4 py-2.5 rounded-2xl shadow-lg text-sm font-semibold anim-up ' +
+        (kind === 'err' ? 'bg-amber-100 text-amber-800' : 'bg-white text-ink border border-teal-100');
+      el.textContent = msg;
+      root.appendChild(el);
+      setTimeout(() => {
+        el.style.transition = 'opacity .35s ease, transform .35s ease';
+        el.style.opacity = '0'; el.style.transform = 'translateY(8px)';
+        setTimeout(() => el.remove(), 400);
+      }, 3000);
+    }
+
+    /* ---------- UI-атомы ---------- */
+    function Btn({ variant = 'primary', className = '', children, ...rest }) {
+      const variants = {
+        primary: 'bg-teal-500 hover:bg-teal-600 text-white shadow-sm',
+        soft:    'bg-teal-50 text-teal-600 border border-teal-100 hover:bg-teal-100',
+        ghost:   'bg-white text-ink border border-gray-200 hover:border-gray-300 shadow-sm',
+        danger:  'bg-red-50 text-red-600 border border-red-100 hover:bg-red-100'
+      };
+      return (
+        <button
+          className={cx('inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold transition-all duration-300 active:scale-[.97] disabled:opacity-40',
+            variants[variant], className)} {...rest}>
+          {children}
+        </button>
+      );
+    }
+
+    // Круговой прогресс-бар "Выполнено на X%"
+    function ProgressRing({ percent, size = 128 }) {
+      const stroke = 11;
+      const r = (size - stroke) / 2;
+      const c = 2 * Math.PI * r;
+      const offset = c - (percent / 100) * c;
+      return (
+        <div className="relative grid place-items-center" style={{ width: size, height: size }}>
+          <svg width={size} height={size} className="-rotate-90">
+            <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#E5E7EB" strokeWidth={stroke} />
+            <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#10B981" strokeWidth={stroke}
+              strokeLinecap="round" strokeDasharray={c} strokeDashoffset={offset}
+              className="ring-progress" />
+          </svg>
+          <div className="absolute text-center">
+            <div className="text-2xl font-bold text-ink tabular-nums">{percent}%</div>
+            <div className="text-[11px] text-ink-soft">выполнено</div>
+          </div>
+        </div>
+      );
+    }
+
+    // Карточка с радио-кнопкой (опрос, пол)
+    function RadioCard({ checked, onClick, children }) {
+      return (
+        <button type="button" onClick={onClick}
+          className={cx('w-full flex items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left text-sm font-semibold border transition-all duration-300',
+            checked ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-sm' : 'border-gray-200 bg-white text-ink hover:border-gray-300')}>
+          <span className="flex items-center gap-2.5">{children}</span>
+          <span className={cx('w-5 h-5 rounded-full border-2 grid place-items-center shrink-0 transition-all duration-300',
+            checked ? 'border-teal-500 bg-teal-500' : 'border-gray-300')}>
+            {checked && <Check size={12} className="text-white" strokeWidth={3} />}
+          </span>
+        </button>
+      );
+    }
+
+    function Field({ label, children }) {
+      return (
+        <label className="block">
+          <span className="block text-xs font-bold text-ink-soft mb-1.5">{label}</span>
+          {children}
+        </label>
+      );
+    }
+
+    const inputCls = 'w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-ink placeholder-gray-400 focus:outline-none focus:border-teal-500 transition-colors duration-300';
+
+    function EmptyState({ icon: Icon, title, hint }) {
+      return (
+        <div className="text-center py-10 px-4">
+          <div className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-3xl bg-teal-50 text-teal-500">
+            <Icon size={26} />
+          </div>
+          <p className="font-semibold text-sm text-ink">{title}</p>
+          {hint && <p className="text-xs text-ink-soft mt-1 leading-relaxed">{hint}</p>}
+        </div>
+      );
+    }
+
+    function Screen({ title, subtitle, children }) {
+      return (
+        <div className="anim-up">
+          <h1 className="text-xl font-bold text-ink">{title}</h1>
+          {subtitle && <p className="text-sm text-ink-soft mt-1">{subtitle}</p>}
+          <div className="mt-5 space-y-4">{children}</div>
+        </div>
+      );
+    }
+
+    /* ---------- Экран 1: Онбординг (/onboarding) ---------- */
+    function Onboarding({ onDone }) {
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [err, setErr] = useState('');
+
+      const submit = (e) => {
+        e.preventDefault();
+        if (!name.trim()) { setErr('Введите имя'); return; }
+        onDone(name.trim(), email.trim());
+      };
+
+      return (
+        <div className="flex-1 flex flex-col justify-center px-6 py-8 anim-up overflow-y-auto">
+          <div className="w-16 h-16 rounded-3xl bg-teal-500 text-white grid place-items-center shadow-sm mb-6 anim-pop">
+            <Pill size={30} />
+          </div>
+          <h1 className="text-2xl font-bold text-ink leading-tight">
+            Умный трекер<br />витаминов и здоровья
+          </h1>
+          <p className="text-sm text-ink-soft mt-2 mb-7 leading-relaxed">
+            Принимайте витамины вовремя, отслеживайте самочувствие и храните анализы
+            в одном спокойном приложении.
+          </p>
+
+          <form onSubmit={submit} className="space-y-4">
+            <Field label="Имя">
+              <input className={inputCls} value={name} onChange={(e) => { setName(e.target.value); setErr(''); }}
+                placeholder="Анна" autoComplete="name" />
+            </Field>
+            <Field label="Email">
+              <input className={inputCls} type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                placeholder="anna@mail.ru" autoComplete="email" />
+            </Field>
+            {err && <p className="text-xs font-semibold text-red-500">{err}</p>}
+            <Btn type="submit" className="w-full py-3.5 text-base">
+              Начать <ArrowRight size={18} />
+            </Btn>
+          </form>
+          <p className="text-[11px] text-ink-soft text-center mt-5 leading-relaxed">
+            Регистрация имитационная: данные сохраняются только в этом браузере (LocalStorage).
+          </p>
+        </div>
+      );
+    }
+
+    /* ---------- Экран 2: Главная (/) ---------- */
+    function HomeScreen({ state, set, go }) {
+      const takenCount = VITAMINS.filter((v) => state.taken[v.id]).length;
+      const percent = Math.round((takenCount / VITAMINS.length) * 100);
+
+      const toggle = (id) => {
+        const next = { ...state.taken, [id]: !state.taken[id] };
+        set({ taken: next });
+        if (next[id]) toast('Отмечено — так держать!');
+      };
+
+      return (
+        <Screen title={`Привет, ${state.name}!`} subtitle="Витамины на сегодня">
+          {/* Прогресс */}
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 flex flex-col items-center">
+            <ProgressRing percent={percent} />
+            <p className="text-xs text-ink-soft mt-3">
+              Принято {takenCount} из {VITAMINS.length} сегодня
+            </p>
+          </div>
+
+          {/* Список витаминов */}
+          <div className="space-y-3">
+            {VITAMINS.map((v) => {
+              const done = !!state.taken[v.id];
+              const Icon = v.icon;
+              return (
+                <div key={v.id}
+                  className={cx('flex items-center gap-3.5 rounded-3xl border p-4 transition-all duration-300',
+                    done ? 'bg-teal-50 border-teal-100' : 'bg-white border-gray-100 shadow-sm')}>
+                  <span className="w-11 h-11 rounded-2xl grid place-items-center text-white shrink-0"
+                    style={{ background: v.color }}>
+                    <Icon size={20} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className={cx('text-sm font-bold truncate', done ? 'text-teal-700' : 'text-ink')}>{v.name}</p>
+                    <p className="text-xs text-ink-soft truncate">{v.dose} · {v.time}</p>
+                  </div>
+                  <button onClick={() => toggle(v.id)} aria-label={'Отметить ' + v.name}
+                    className={cx('w-8 h-8 rounded-full grid place-items-center border-2 check-pop shrink-0',
+                      done ? 'bg-teal-500 border-teal-500 text-white scale-105' : 'border-gray-300 text-transparent hover:border-teal-400')}>
+                    <Check size={16} strokeWidth={3} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Кнопка опроса */}
+          <Btn className="w-full py-3.5" onClick={() => go('/survey')}>
+            <ClipboardCheck size={18} />
+            {state.surveyCompleted ? 'Посмотреть базовый отчёт' : 'Пройти опрос здоровья'}
+          </Btn>
+
+          {state.surveyCompleted && (
+            <div className="rounded-3xl border border-teal-100 bg-teal-50/60 p-4 flex items-center gap-3">
+              <span className="w-9 h-9 rounded-2xl bg-teal-500 text-white grid place-items-center shrink-0">
+                <Sparkles size={17} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-teal-700">Базовый отчёт готов</p>
+                <button onClick={() => go('/survey')} className="text-xs font-semibold text-teal-600 hover:underline">
+                  Открыть →
+                </button>
+              </div>
+            </div>
+          )}
+        </Screen>
+      );
+    }
+
+    /* ---------- Экран 3: Опрос (/survey) ---------- */
+    function Survey({ state, set, go }) {
+      const [step, setStep] = useState(0);
+      const [answers, setAnswers] = useState(state.surveyAnswers || {});
+
+      // Уже проходили — сразу отчёт
+      if (state.surveyCompleted) {
+        const goal = (state.surveyAnswers || {}).main_goal || 'energy';
+        return (
+          <Screen title="Базовый отчёт" subtitle="На основе ваших ответов">
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 anim-up">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="w-11 h-11 rounded-2xl bg-teal-50 text-teal-500 grid place-items-center">
+                  <HeartPulse size={22} />
+                </span>
+                <div>
+                  <p className="font-bold text-sm text-ink">Рекомендация дня</p>
+                  <p className="text-xs text-ink-soft">Опрос завершён · можно пройти заново</p>
+                </div>
+              </div>
+              <p className="text-sm text-ink-soft leading-relaxed">{REPORTS[goal]}</p>
+            </div>
+
+            <div className="rounded-3xl border border-amber-100 bg-amber-50 p-4 flex gap-2.5">
+              <span className="text-amber-500 shrink-0 mt-0.5"><Activity size={16} /></span>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                Отчёт носит информационный характер и не является медицинской рекомендацией.
+                Точную схему приёма подтверждает ваш врач.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <Btn variant="ghost" className="flex-1"
+                onClick={() => { set({ surveyCompleted: false }); setStep(0); setAnswers({}); }}>
+                Пройти заново
+              </Btn>
+              <Btn className="flex-1" onClick={() => go('/')}>На главную</Btn>
+            </div>
+          </Screen>
+        );
+      }
+
+      const q = SURVEY[step];
+      const total = SURVEY.length;
+      const pick = (v) => setAnswers((a) => ({ ...a, [q.id]: v }));
+      const next = () => {
+        if (step < total - 1) { setStep(step + 1); return; }
+        set({ surveyCompleted: true, surveyAnswers: answers });
+        toast('Опрос завершён — отчёт готов!');
+      };
+
+      return (
+        <Screen title="Опрос здоровья" subtitle={`Шаг ${step + 1} из ${total}`}>
+          {/* Прогресс опроса */}
+          <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+            <div className="h-full bg-teal-500 rounded-full transition-all duration-500"
+              style={{ width: ((step + 1) / total) * 100 + '%' }} />
+          </div>
+
+          <div className="anim-fade" key={q.id}>
+            <p className="font-bold text-ink mb-3 leading-snug">{q.q}</p>
+            <div className="space-y-2.5">
+              {q.opts.map((o) => (
+                <RadioCard key={o.v} checked={answers[q.id] === o.v} onClick={() => pick(o.v)}>
+                  {o.label}
+                </RadioCard>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <Btn variant="ghost" className="flex-1" disabled={step === 0}
+              onClick={() => setStep(step - 1)}>
+              <ChevronLeft size={16} /> Назад
+            </Btn>
+            <Btn className="flex-1" disabled={!answers[q.id]} onClick={next}>
+              {step === total - 1 ? 'Завершить' : 'Далее'}
+              {step < total - 1 && <ChevronRight size={16} />}
+            </Btn>
+          </div>
+        </Screen>
+      );
+    }
+
+    /* ---------- Экран 4: Анализы (/uploads) ---------- */
+    function Uploads({ state, set }) {
+      const fileRef = useRef(null);
+      const [drag, setDrag] = useState(false);
+
+      const addFiles = (fileList) => {
+        const arr = Array.from(fileList || []);
+        if (!arr.length) return;
+        const added = [];
+        for (const f of arr) {
+          const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+          if (!isPdf) { toast('Можно загружать только PDF', 'err'); continue; }
+          if (f.size > 10 * 1024 * 1024) { toast('Файл больше 10 МБ', 'err'); continue; }
+          added.push({ id: uid(), name: f.name || 'analysis.pdf', size: f.size, date: new Date().toISOString() });
+        }
+        if (added.length) {
+          set({ files: state.files.concat(added) });
+          toast('Файл добавлен в список');
+        }
+      };
+
+      const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' МБ' : Math.max(1, Math.round(b / 1024)) + ' КБ';
+
+      return (
+        <Screen title="Мои анализы" subtitle="PDF-документы сохраняются в списке">
+          {/* Зона загрузки */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
+            onClick={() => fileRef.current && fileRef.current.click()}
+            className={cx('rounded-3xl border-2 border-dashed p-7 text-center cursor-pointer transition-all duration-300',
+              drag ? 'border-teal-500 bg-teal-50' : 'border-gray-200 bg-white hover:border-teal-400 hover:bg-teal-50/40')}>
+            <span className="w-12 h-12 mx-auto mb-3 grid place-items-center rounded-2xl bg-teal-50 text-teal-500">
+              <Upload size={22} />
+            </span>
+            <p className="text-sm font-bold text-ink">Загрузить PDF</p>
+            <p className="text-xs text-ink-soft mt-1">Перетащите файл сюда или нажмите · до 10 МБ</p>
+            <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple className="hidden"
+              onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+          </div>
+
+          {/* Список файлов */}
+          {state.files.length === 0 ? (
+            <EmptyState icon={FolderOpen} title="Файлов пока нет"
+              hint="Загрузите результаты анализов — они останутся в списке после обновления страницы." />
+          ) : (
+            <div className="space-y-2.5">
+              {state.files.map((f) => (
+                <div key={f.id}
+                  className="flex items-center gap-3 rounded-3xl border border-gray-100 bg-white shadow-sm p-4 anim-up">
+                  <span className="w-10 h-10 rounded-2xl bg-red-50 text-red-500 grid place-items-center shrink-0">
+                    <FileText size={19} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-ink truncate">{f.name}</p>
+                    <p className="text-xs text-ink-soft">
+                      {fmtSize(f.size)} · {new Date(f.date).toLocaleDateString('ru-RU')}
+                    </p>
+                  </div>
+                  <button aria-label="Удалить файл"
+                    onClick={() => set({ files: state.files.filter((x) => x.id !== f.id) })}
+                    className="w-9 h-9 grid place-items-center rounded-full text-ink-soft hover:text-red-500 hover:bg-red-50 transition-colors duration-300">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Screen>
+      );
+    }
+
+    /* ---------- Экран 5: Профиль (/profile) ---------- */
+    function Profile({ state, set }) {
+      const [form, setForm] = useState({
+        fullName: state.profile.fullName || state.name,
+        gender: state.profile.gender || 'male',
+        age: state.profile.age,
+        goals: state.profile.goals
+      });
+      const upd = (p) => setForm((f) => ({ ...f, ...p }));
+
+      const save = () => {
+        if (!form.fullName.trim()) { toast('Укажите ФИО', 'err'); return; }
+        set({ profile: form, name: form.fullName.trim().split(' ')[0] || state.name });
+        toast('Профиль сохранён');
+      };
+
+      return (
+        <Screen title="Профиль" subtitle="Данные хранятся только в этом браузере">
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 space-y-4">
+            <Field label="ФИО">
+              <input className={inputCls} value={form.fullName}
+                onChange={(e) => upd({ fullName: e.target.value })} placeholder="Анна Волкова" />
+            </Field>
+
+            <div>
+              <span className="block text-xs font-bold text-ink-soft mb-2">Пол</span>
+              <div className="grid grid-cols-2 gap-2.5">
+                <RadioCard checked={form.gender === 'male'} onClick={() => upd({ gender: 'male' })}>
+                  <UserRound size={15} /> Мужской
+                </RadioCard>
+                <RadioCard checked={form.gender === 'female'} onClick={() => upd({ gender: 'female' })}>
+                  <UserRound size={15} /> Женский
+                </RadioCard>
+              </div>
+            </div>
+
+            <Field label="Возраст">
+              <input className={inputCls} type="number" min="1" max="120" value={form.age}
+                onChange={(e) => upd({ age: e.target.value })} placeholder="32" />
+            </Field>
+
+            <Field label="Цели">
+              <textarea className={cx(inputCls, 'resize-none h-24')} value={form.goals}
+                onChange={(e) => upd({ goals: e.target.value })}
+                placeholder="Например: больше энергии, крепкий сон, иммунитет зимой" />
+            </Field>
+
+            <Btn className="w-full" onClick={save}>Сохранить</Btn>
+          </div>
+
+          <Btn variant="ghost" className="w-full"
+            onClick={() => { window.open('https://example.com', '_blank', 'noopener'); toast('Открываем сайт партнёра (демо)'); }}>
+            <ExternalLink size={16} /> Перейти на сайт партнёра
+          </Btn>
+
+          <p className="text-[11px] text-ink-soft text-center leading-relaxed">
+            Приложение не ставит диагнозов и не назначает препараты — только удобный учёт.
+          </p>
+        </Screen>
+      );
+    }
+
+    /* ---------- Оболочка: MobileShell + роутинг + таб-бар ---------- */
+    const TABS = [
+      { path: '/', label: 'Главная', icon: HomeIcon },
+      { path: '/survey', label: 'Опрос', icon: ClipboardList },
+      { path: '/uploads', label: 'Анализы', icon: FileText },
+      { path: '/profile', label: 'Профиль', icon: User }
+    ];
+
+    function App() {
+      const [state, setState] = useState(loadState);
+      const [route, setRoute] = useState(() => {
+        const h = (location.hash || '').replace(/^#\/?/, '');
+        return ['', 'survey', 'uploads', 'profile', 'onboarding'].includes(h) ? h : '';
+      });
+
+      useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {} }, [state]);
+
+      useEffect(() => {
+        const onHash = () => {
+          const h = (location.hash || '').replace(/^#\/?/, '');
+          setRoute(['', 'survey', 'uploads', 'profile', 'onboarding'].includes(h) ? h : '');
+        };
+        window.addEventListener('hashchange', onHash);
+        return () => window.removeEventListener('hashchange', onHash);
+      }, []);
+
+      const go = useCallback((path) => {
+        location.hash = '#' + path;
+        setRoute(path.replace(/^\//, ''));
+      }, []);
+
+      const set = useCallback((patch) => {
+        setState((prev) => ({ ...prev, ...(typeof patch === 'function' ? patch(prev) : patch) }));
+      }, []);
+
+      // Гард: нет имени -> онбординг; есть имя и стоишь на онбординге -> домой
+      useEffect(() => {
+        if (!state.name && route !== 'onboarding') go('/onboarding');
+        if (state.name && route === 'onboarding') go('/');
+      }, [state.name, route, go]);
+
+      const finishOnboarding = (name, email) => { set({ name, email }); go('/'); };
+
+      const isOnboarding = route === 'onboarding' || !state.name;
+
+      return (
+        <div className="h-screen flex justify-center bg-gray-200">
+          <div className="relative w-full max-w-md h-full bg-cloud flex flex-col overflow-hidden shadow-xl">
+            {/* Контент (скроллится) */}
+            <main className="flex-1 overflow-y-auto px-5 pt-6 pb-6">
+              {!state.name ? (
+                <Onboarding onDone={finishOnboarding} />
+              ) : route === '' ? (
+                <HomeScreen state={state} set={set} go={go} />
+              ) : route === 'survey' ? (
+                <Survey state={state} set={set} go={go} />
+              ) : route === 'uploads' ? (
+                <Uploads state={state} set={set} />
+              ) : (
+                <Profile state={state} set={set} />
+              )}
+            </main>
+
+            {/* Нижняя навигация (скрыта на онбординге) */}
+            {!isOnboarding && (
+              <nav className="shrink-0 border-t border-gray-100 bg-white/95 backdrop-blur px-2 pt-1.5"
+                style={{ paddingBottom: 'calc(8px + env(safe-area-inset-bottom))' }}>
+                <div className="flex">
+                  {TABS.map((t) => {
+                    const active = route === t.path.replace(/^\//, '');
+                    return (
+                      <button key={t.path} onClick={() => go(t.path)}
+                        className={cx('flex-1 flex flex-col items-center gap-1 py-1.5 rounded-2xl text-[11px] font-semibold transition-all duration-300',
+                          active ? 'text-teal-600' : 'text-gray-400 hover:text-gray-600')}>
+                        <span className={cx('p-1.5 rounded-xl transition-all duration-300',
+                          active ? 'bg-teal-50 scale-105' : '')}>
+                          <t.icon size={20} strokeWidth={active ? 2.4 : 2} />
+                        </span>
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </nav>
+            )}
+
+            <div id="toast-root"
+              className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none" />
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+  <script>
+    /* Если приложение не стартовало — показываем причину на экране */
+    setTimeout(function () {
+      var root = document.getElementById('root');
+      if (root && root.firstChild) return;
+      var msg = 'Приложение не запустилось.\n\n' +
+        (window.__mbErrors && window.__mbErrors.length
+          ? window.__mbErrors.slice(0, 8).join('\n')
+          : 'Консоль пуста — похоже, не загрузились CDN-скрипты (нет интернета или блокировщик).');
+      var el = document.createElement('div');
+      el.style.cssText = 'position:fixed;inset:0;padding:24px;background:#111827;color:#F9FAFB;' +
+        'font:13px/1.6 Consolas,monospace;z-index:9999;white-space:pre-wrap;overflow:auto';
+      el.textContent = msg;
+      document.body.appendChild(el);
+    }, 4000);
+  </script>
+</body>
+</html>
